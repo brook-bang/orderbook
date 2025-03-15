@@ -171,9 +171,97 @@ impl OrderBook {
             for o in price_level.iter_mut() {
                 if o.qty <= *incoming_order_qty {
                     *incoming_order_qty -= o.qty;
+                    done_qty += 0;
+                    order_loc.remove(&o.order_id);
+                } else {
+                    o.qty -= *incoming_order_qty;
+                    done_qty += *incoming_order_qty;
+                    *incoming_order_qty = 0;
+                }
+            }
+            price_level.retain(|x| x.qty != 0);
+            done_qty
+        }
+
+        let mut remaining_order_qty = order_qty;
+        dbgp!(
+            "Got order with qty {}, at price {}",
+            remaining_order_qty,
+            price
+        );
+        let mut fill_result = FillResult::new();
+
+        match s {
+            Side::Bid => {
+                let askbook = &mut self.ask_book;
+                let price_map = &mut askbook.price_map;
+                let price_levels = &mut askbook.price_levels;
+                let mut price_map_iter = price_map.iter();
+
+                if let Some((mut x, _)) = price_map_iter {
+                    while price >= *x {
+                        let curr_level = price_map[x];
+                        let matched_qty = match_at_price_level(
+                            &mut price_levels[curr_level],
+                            &mut remaining_order_qty,
+                            &mut self.order_loc,
+                        );
+                        if matched_qty != 0 {
+                            dbgp!("Matched {} qty at level {}", matched_qty, x);
+                        }
+                        if let Some((a, _)) = price_map_iter.next() {
+                            x = a;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            Side::Ask => {
+                let bidbook = &mut self.bid_book;
+                let price_map = &mut bidbook.price_map;
+                let price_levels = &mut bidbook.price_levels;
+                let mut price_map_iter = price_map.iter();
+
+                if let Some((mut x, _)) = price_map_iter.next_back() {
+                    while price <= *x {
+                        let curr_level = price_map[x];
+                        let matched_qty = match_at_price_level(
+                            &mut price_levels[curr_level],
+                            &mut incoming_order_qty,
+                            &mut self.order_loc,
+                        );
+                        if matched_qty != 0 {
+                            dbgp!("Matched {} qty at level {}", matched_qty, x);
+                            fill_result.filled_orders.push((matched_qty, *x));
+                        }
+                        if let Some((a, _)) = price_map_iter.next_back() {
+                            x = a;
+                        } else {
+                            break;
+                        }
+                    }
                 }
             }
         }
+        fill_result.remaining_qty = remaining_order_qty;
+        if remaining_order_qty != 0 {
+            dbgp!(
+                "Still remaining qty {} at price level {}",
+                remaining_order_qty,
+                price
+            );
+            if remaining_order_qty == order_qty {
+                fill_result.status = OrderStatus::Created;
+            } else {
+                fill_result.status = OrderStatus::PartiallyFilled;
+            }
+            self.create_new_limit_order(s, price, remaining_order_qty);
+        } else {
+            fill_result.status = OrderStatus::Filled;
+        }
+        self.update_bbo();
+        fill_result
     }
 
     pub fn get_bbo(&self) {
