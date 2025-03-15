@@ -115,7 +115,7 @@ impl OrderBook {
             };
             currdeque.retain(|x| x.order_id != order_id);
             self.order_loc.remove(&order_id);
-            Ok("Successfully candelled order")
+            Ok("Successfully cancelled order")
         } else {
             Err("No such order id")
         }
@@ -171,7 +171,8 @@ impl OrderBook {
             for o in price_level.iter_mut() {
                 if o.qty <= *incoming_order_qty {
                     *incoming_order_qty -= o.qty;
-                    done_qty += 0;
+                    done_qty += o.qty;
+                    o.qty = 0;
                     order_loc.remove(&o.order_id);
                 } else {
                     o.qty -= *incoming_order_qty;
@@ -198,7 +199,7 @@ impl OrderBook {
                 let price_levels = &mut askbook.price_levels;
                 let mut price_map_iter = price_map.iter();
 
-                if let Some((mut x, _)) = price_map_iter {
+                if let Some((mut x, _)) = price_map_iter.next() {
                     while price >= *x {
                         let curr_level = price_map[x];
                         let matched_qty = match_at_price_level(
@@ -208,6 +209,7 @@ impl OrderBook {
                         );
                         if matched_qty != 0 {
                             dbgp!("Matched {} qty at level {}", matched_qty, x);
+                            fill_result.filled_orders.push((matched_qty, *x));
                         }
                         if let Some((a, _)) = price_map_iter.next() {
                             x = a;
@@ -228,7 +230,7 @@ impl OrderBook {
                         let curr_level = price_map[x];
                         let matched_qty = match_at_price_level(
                             &mut price_levels[curr_level],
-                            &mut incoming_order_qty,
+                            &mut remaining_order_qty,
                             &mut self.order_loc,
                         );
                         if matched_qty != 0 {
@@ -270,7 +272,7 @@ impl OrderBook {
         println!("Best bid {}, qty {}", self.best_bid_price, total_bid_qty);
         println!("Best ask {}, qty {}", self.best_offer_price, total_ask_qty);
         println!(
-            "Spread is {:.6}",
+            "Spread is {:.6},",
             ((self.best_offer_price - self.best_bid_price) as f64 / self.best_offer_price as f64)
                 as f32
         );
