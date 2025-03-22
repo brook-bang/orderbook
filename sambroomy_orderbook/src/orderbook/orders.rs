@@ -147,6 +147,7 @@ impl OrderRequest {
     }
 }
 
+#[derive(Debug,Clone,PartialEq)]
 pub struct TradeOrder {
     pub id: OrderId,
     pub side: Side,
@@ -214,17 +215,17 @@ impl TradeOrder {
         self.initial_qty - self.remaining_qty
     }
 
-    pub fn cancel(&mut self,qty: impl Into<Quantity>) {
+    pub fn cancel(&mut self, qty: impl Into<Quantity>) {
         let qty = qty.into();
         let qty = qty.min(self.remaining_qty);
         self.remaining_qty -= qty
     }
 
-    pub fn mergable(&self,other: &mut TradeOrder) -> bool {
+    pub fn mergable(&self, other: &mut TradeOrder) -> bool {
         self.side == other.side && self.order_type == other.order_type
     }
 
-    pub fn merage(&mut self,mut other: TradeOrder) -> Option<Self> {
+    pub fn merage(&mut self, mut other: TradeOrder) -> Option<Self> {
         if !self.mergable(&mut other) {
             warn!("Cannot merge orders with different side or order type");
             return Some(other);
@@ -238,20 +239,103 @@ impl TradeOrder {
 }
 
 #[allow(dead_code)]
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct OrderResult {
     traid_id: OrderId,
     side: Side,
     order_type: OrderType,
     initial_qty: Quantity,
     pub remaining_qty: Quantity,
-    filles: Vec<Fill>,
+    fills: Vec<Fill>,
     pub status: OrderStatus,
 }
 
-impl From<TradeOrder> for OrderResult { 
+impl From<TradeOrder> for OrderResult {
     fn from(trade_order: TradeOrder) -> Self {
-        OrderStatus::Filled
+        let status = if trade_order.remaining_qty == Decimal::ZERO {
+            OrderStatus::Filled
+        } else if trade_order.fills.is_empty() {
+            match trade_order.order_type {
+                OrderType::Market => OrderStatus::Cancelled,
+                OrderType::Limit(_) => OrderStatus::Open,
+                OrderType::IOC(_) => OrderStatus::Cancelled,
+                OrderType::FOK(_) => OrderStatus::Cancelled,
+                OrderType::SystemLevel(_) => OrderStatus::Open,
+            }
+        } else {
+            match trade_order.order_type {
+                OrderType::Market => OrderStatus::PartiallyFilled,
+                OrderType::Limit(_) => OrderStatus::PartiallyFilled,
+                OrderType::IOC(_) => OrderStatus::PartiallyFilled,
+                OrderType::FOK(_) => OrderStatus::Cancelled,
+                OrderType::SystemLevel(_) => OrderStatus::PartiallyFilled,
+            }
+        };
+        Self {
+            traid_id: trade_order.id,
+            side: trade_order.side,
+            order_type: trade_order.order_type,
+            initial_qty: trade_order.initial_qty,
+            remaining_qty: trade_order.remaining_qty,
+            fills: trade_order.fills,
+            status,
+        }
     }
-    
+}
+
+impl OrderResult {
+    pub fn cancelled(trade_order: TradeOrder) -> Self {
+        Self {
+            traid_id: trade_order.id,
+            side: trade_order.side,
+            order_type: trade_order.order_type,
+            initial_qty: trade_order.initial_qty,
+            remaining_qty: trade_order.remaining_qty,
+            fills: trade_order.fills,
+            status: OrderStatus::Cancelled,
+        }
+    }
+
+    pub fn avr_fill_price(&self) -> Decimal {
+        let mut total = Decimal::ZERO;
+        let mut qty = Decimal::ZERO;
+        for fill in &self.fills {
+            total += fill.price * fill.qty;
+            qty += fill.qty;
+        }
+        total / qty
+    }
+
+    pub fn get_id(&self) -> OrderId {
+        self.traid_id
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TradeExecution {
+    pub qty: Quantity,
+    pub price: Price,
+    pub taker_order_id: OrderId,
+    pub maker_order_id: OrderId,
+    pub take_side: Side,
+    pub timestamp: Timestamp,
+}
+
+impl TradeExecution {
+    pub fn new(
+        qty: Quantity,
+        price: Price,
+        taker_order: &TradeOrder,
+        maker_order: &TradeOrder,
+        taker_side: Side,
+    ) -> Self {
+        Self {
+            qty,
+            price,
+            taker_order_id: taker_order.id,
+            maker_order_id: maker_order.id,
+            take_side: taker_side,
+            timestamp: timestamp(),
+        }
+    }
 }
