@@ -280,14 +280,117 @@ impl OrderBook {
     }
 
     pub fn best_prices(&self) -> (Option<Price>, Option<Price>) {
-        (self.bids.best_price(),self.asks.best_price())
+        (self.bids.best_price(), self.asks.best_price())
     }
 
-    pub fn delete_order(&mut self,order_id: OrderId) -> Option<OrderResult> {
-        let (side,price) =self.order_loc.remove(&order_id)?;
-        
-    
+    pub fn delete_order(&mut self, order_id: OrderId) -> Option<OrderResult> {
+        let (side, price) = self.order_loc.remove(&order_id)?;
+        let book = self.get_mut_book(&side);
+        let order = book.remove_order(&price, order_id)?;
+        Some(OrderResult::cancelled(order))
     }
 
+    pub fn cancel_order(
+        &mut self,
+        order_id: OrderId,
+        qty: impl Into<Quantity>,
+    ) -> Option<OrderResult> {
+        let trade_order = self.get_order_mut(&order_id)?;
+        trade_order.cancel(qty);
+        if trade_order.remaining_qty == Decimal::ZERO {
+            return self.delete_order(order_id);
+        }
+        Some(OrderResult::from(trade_order.clone()))
+    }
 
+    pub fn add_order(&mut self, order: OrderRequest) -> (OrderResult, Vec<TradeExecution>) {
+        let opposite_book = self.get_mut_opposite_book(&order.side);
+        let mut executions = Vec::new();
+        if let OrderType::FOK(price) = order.order_type {
+            
+        }
+    }
+
+    pub fn spread(&self) -> Option<Price> {
+        match (self.best_ask(), self.best_bid()) {
+            (Some(ask), Some(bid)) if ask > bid => Some(ask - bid),
+            _ => None,
+        }
+    }
+
+    pub fn get_depth(&self) -> (usize, usize) {
+        (self.asks.get_depth(), self.bids.get_depth())
+    }
+
+    fn get_book(&self, side: &Side) -> &HalfBook {
+        match side {
+            Side::Ask => &self.asks,
+            Side::Bid => &self.bids,
+        }
+    }
+
+    fn get_mut_book(&mut self, side: &Side) -> &mut HalfBook {
+        match side {
+            Side::Ask => &mut self.asks,
+            Side::Bid => &mut self.bids,
+        }
+    }
+
+    pub fn get_order_book_state(&self) -> OrderBookState {
+        let mut ask = self.asks.get_levels();
+        ask.reverse();
+        OrderBookState {
+            asks: ask,
+            bids: self.bids.get_levels(),
+        }
+    }
+
+    pub fn get_orders_at_price(
+        &self,
+        side: Side,
+        price: impl Into<Price>,
+    ) -> Option<Vec<&TradeOrder>> {
+        self.get_book(&side).get_orders_at_price(price)
+    }
+
+    pub fn get_total_volume(&self) -> Quantity {
+        self.asks.get_total_volume() + self.bids.get_total_volume()
+    }
+
+    pub fn get_price_range(&self) -> Option<(Price, Price)> {
+        Some((self.asks.get_price_range()?, self.bids.get_price_range()?))
+    }
+
+    pub fn get_order(&self, order_id: OrderId) -> Option<&TradeOrder> {
+        self.order_loc
+            .get(&order_id)
+            .and_then(|(side, price)| self.get_book(side).get_order(*price, order_id))
+    }
+
+    pub fn get_order_mut(&mut self, order_id: &OrderId) -> Option<&mut TradeOrder> {
+        self.order_loc
+            .get(order_id)
+            .and_then(|(side, price)| match side {
+                Side::Ask => self.asks.get_order_mut(price, order_id),
+                Side::Bid => self.bids.get_order_mut(price, order_id),
+            })
+    }
+
+    pub fn get_volume_at_price(&self, side: &Side, price: &Price) -> Option<Quantity> {
+        self.get_book(side).get_total_qty(price)
+    }
+
+    pub fn get_order_count(&self) -> usize {
+        self.order_loc.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.asks.is_empty() && self.bids.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.asks.clear();
+        self.bids.clear();
+        self.order_loc.clear();
+    }
 }
