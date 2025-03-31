@@ -1,3 +1,4 @@
+use binance_spot_connector_rust::wallet::trade_fee;
 use dashmap::iter;
 use rust_decimal::Decimal;
 
@@ -307,8 +308,39 @@ impl OrderBook {
         let opposite_book = self.get_mut_opposite_book(&order.side);
         let mut executions = Vec::new();
         if let OrderType::FOK(price) = order.order_type {
-            
-        }
+            let available_qty = opposite_book.get_available_quantity(price);
+            info!("Available qty: {}", available_qty);
+            info!("Order qty: {}", order.qty);
+            if available_qty < order.qty {
+                warn!("FOK order failed");
+                return (OrderResult::from(order), executions);
+            }
+        };
+
+        let mut trade_order = TradeOrder::from(order);
+
+        
+
+        
+    }
+
+    pub fn add_limit_order(&mut self, side: Side, price: impl Into<Price>, order: TradeOrder) {
+        let price = price.into();
+        assert_eq!(self.order_loc.insert(order.id, (side, price)), None);
+        self.get_mut_book(&side).add_order(price, order);
+    }
+
+    pub fn add_system_order(&mut self, side: Side, price: impl Into<Price>, order: TradeOrder) {
+        let price = price.into();
+        match self.get_order_mut(&order.id) {
+            Some(existing_order) => {
+                assert_eq!(existing_order.merage(order), None);
+            }
+            None => {
+                self.order_loc.insert(order.id, (side, price));
+                self.get_mut_book(&side).add_order(price, order);
+            }
+        };
     }
 
     pub fn spread(&self) -> Option<Price> {
